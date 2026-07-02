@@ -71,7 +71,7 @@ fun CityListScreen(viewModel: MainViewModel, onCityClick: (Int) -> Unit) {
     var cityNameInput by remember { mutableStateOf("") }
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text("Мои Города") }) },
+        topBar = { TopAppBar(title = { Text("Сашины монетки") }) },
         floatingActionButton = {
             FloatingActionButton(onClick = { showDialog = true }) {
                 Icon(Icons.Default.Add, contentDescription = "Добавить город")
