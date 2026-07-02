@@ -1,6 +1,7 @@
 package com.mt.coincollection
 
 import android.os.Bundle
+import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -25,7 +26,17 @@ import com.mt.coincollection.data.Coin
 import com.mt.coincollection.ui.theme.MainViewModel
 import com.mt.coincollection.ui.theme.CoinCollectionTheme
 import java.io.File
-
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.transformable
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.Alignment
+import android.net.Uri
+import androidx.core.content.FileProvider
 class MainActivity : ComponentActivity() {
     private val viewModel: MainViewModel by viewModels()
 
@@ -71,7 +82,7 @@ fun CityListScreen(viewModel: MainViewModel, onCityClick: (Int) -> Unit) {
     var cityNameInput by remember { mutableStateOf("") }
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text("Сашины монетки") }) },
+        topBar = { TopAppBar(title = { Text("Города") }) },
         floatingActionButton = {
             FloatingActionButton(onClick = { showDialog = true }) {
                 Icon(Icons.Default.Add, contentDescription = "Добавить город")
@@ -130,29 +141,44 @@ fun CityListScreen(viewModel: MainViewModel, onCityClick: (Int) -> Unit) {
 fun CoinListScreen(viewModel: MainViewModel, cityId: Int, onBackClick: () -> Unit) {
     val coins by viewModel.getCoinsForCity(cityId).collectAsState()
     var showAddDialog by remember { mutableStateOf(false) }
+    var showSourceDialog by remember { mutableStateOf(false) }
 
-    // Лаунчер для выбора фото из галереи (современный Photo Picker)
+    // Для создания временного файла камеры
+    val context = LocalContext.current
+    val tempPhotoUri = remember { mutableStateOf<Uri?>(null) }
+
+    // Лаунчер для выбора фото из галереи
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri ->
         if (uri != null) {
-            // Если фото выбрано, сразу добавляем монету (для упрощения UI)
             viewModel.addCoin(cityId, "Монета", uri)
+        }
+    }
+
+    // Лаунчер для камеры
+    val cameraLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicture()
+    ) { success ->
+        if (success) {
+            tempPhotoUri.value?.let { uri ->
+                viewModel.addCoin(cityId, "Монета", uri)
+            }
         }
     }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Монеты") },
+                title = { Text("Коллекция") },
                 navigationIcon = {
                     TextButton(onClick = onBackClick) { Text("Назад") }
                 }
             )
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = { showAddDialog = true }) {
-                Icon(Icons.Default.Add, contentDescription = "Добавить монету")
+            FloatingActionButton(onClick = { showSourceDialog = true }) {
+                Text("+", style = MaterialTheme.typography.headlineMedium)
             }
         }
     ) { padding ->
@@ -163,22 +189,41 @@ fun CoinListScreen(viewModel: MainViewModel, cityId: Int, onBackClick: () -> Uni
         }
     }
 
-    // Диалог добавления монеты
-    if (showAddDialog) {
+    // Диалог выбора источника (камера или галерея)
+    if (showSourceDialog) {
         AlertDialog(
-            onDismissRequest = { showAddDialog = false },
-            title = { Text("Новая монета") },
-            text = { Text("Сейчас откроется галерея для выбора фото монеты.") },
+            onDismissRequest = { showSourceDialog = false },
+            title = { Text("Добавить монету") },
+            text = { Text("Выберите способ добавления фото") },
             confirmButton = {
-                TextButton(onClick = {
-                    showAddDialog = false
-                    photoPickerLauncher.launch(
-                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                    )
-                }) { Text("Выбрать фото") }
+                Column {
+                    TextButton(onClick = {
+                        showSourceDialog = false
+                        // Создаем временный файл для камеры
+                        val tempFile = File(context.cacheDir, "camera_photos/temp_photo.jpg")
+                        tempFile.parentFile?.mkdirs()
+                        val uri = FileProvider.getUriForFile(
+                            context,
+                            "${context.packageName}.fileprovider",
+                            tempFile
+                        )
+                        tempPhotoUri.value = uri
+                        cameraLauncher.launch(uri)
+                    }) {
+                        Text("📷 Сфотографировать")
+                    }
+                    TextButton(onClick = {
+                        showSourceDialog = false
+                        photoPickerLauncher.launch(
+                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                        )
+                    }) {
+                        Text("🖼️ Выбрать из галереи")
+                    }
+                }
             },
             dismissButton = {
-                TextButton(onClick = { showAddDialog = false }) { Text("Отмена") }
+                TextButton(onClick = { showSourceDialog = false }) { Text("Отмена") }
             }
         )
     }
@@ -187,14 +232,23 @@ fun CoinListScreen(viewModel: MainViewModel, cityId: Int, onBackClick: () -> Uni
 // --- КАРТОЧКА МОНЕТЫ ---
 @Composable
 fun CoinItem(coin: Coin) {
-    val context = LocalContext.current
+    // Состояние для открытия полноэкранного просмотра
+    var showFullscreen by remember { mutableStateOf(false) }
+
+    // Если нужно показать полный экран
+    if (showFullscreen) {
+        FullscreenImageDialog(imagePath = coin.imagePath) {
+            showFullscreen = false
+        }
+    }
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .padding(8.dp)
+            .clickable { showFullscreen = true } // Делаем всю карточку кликабельной
     ) {
         Row(modifier = Modifier.padding(8.dp)) {
-            // Загрузка картинки из файла
             AsyncImage(
                 model = File(coin.imagePath),
                 contentDescription = coin.name,
@@ -202,10 +256,64 @@ fun CoinItem(coin: Coin) {
                 contentScale = ContentScale.Crop
             )
             Spacer(modifier = Modifier.width(16.dp))
-            Column {
+            Column(modifier = Modifier.weight(1f)) {
                 Text(text = coin.name, style = MaterialTheme.typography.titleMedium)
-                Text(text = "Путь: ${coin.imagePath.takeLast(20)}...", style = MaterialTheme.typography.bodySmall)
+                Text(
+                    text = "Путь: ${coin.imagePath.takeLast(20)}...",
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1
+                )
             }
+        }
+    }
+}
+
+@Composable
+fun FullscreenImageDialog(imagePath: String, onDismiss: () -> Unit) {
+    var scale by remember { mutableStateOf(1f) }
+    var offset by remember { mutableStateOf(Offset.Zero) }
+
+    // Создаем состояние для трансформации
+    val transformableState = rememberTransformableState { zoomChange, panChange, rotationChange ->
+        scale = (scale * zoomChange).coerceIn(1f, 5f)
+        offset = offset + panChange
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+        ) {
+            // Кнопка закрытия (X)
+            Text(
+                text = "✕",
+                color = Color.White,
+                fontSize = 32.sp,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(16.dp)
+                    .clickable { onDismiss() }
+            )
+
+            // Изображение с зумом
+            AsyncImage(
+                model = File(imagePath),
+                contentDescription = "Монета на весь экран",
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer(
+                        scaleX = scale,
+                        scaleY = scale,
+                        translationX = offset.x,
+                        translationY = offset.y
+                    )
+                    .transformable(state = transformableState),
+                contentScale = ContentScale.Fit
+            )
         }
     }
 }
